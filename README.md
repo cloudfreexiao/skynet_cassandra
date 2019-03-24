@@ -40,22 +40,14 @@ which adds support for multi-node Cassandra datacenters.
 Single host module (Lua and OpenResty):
 
 ```lua
-local cassandra = require "cassandra"
-
-assert(peer:connect ({
-    host = "127.0.0.1",
-  port = 9042,
-  keyspace = "cloudfreexiao"
-})
-
+local cassandra = require "cassandra.cassandra"
+local peer = cassandra.connect({keyspace = "cloudfreexiao"})
 assert(peer:execute("INSERT INTO users(id, name, age) VALUES(?, ?, ?)", {
-  cassandra.uuid("1144bada-852c-11e3-89fb-e0b9a54a6d11"),
+  "1144bada-852c-11e3-89fb-e0b9a54a6d11",
   "John O Reilly",
-  42
-}))
-
+  42}))
+    
 local rows = assert(peer:execute "SELECT * FROM users")
-
 local user = rows[1]
 print(user.name) -- John O Reilly
 print(user.age)  -- 42
