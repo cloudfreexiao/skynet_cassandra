@@ -123,7 +123,6 @@ _Host.__index = _Host
 --   keyspace = "my_keyspace"
 -- }
 --
-local inspect_lib = require "inspect"
 local function __dispatch_resp(sock)
   do
       -- receive frame version byte
