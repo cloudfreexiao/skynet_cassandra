@@ -212,8 +212,7 @@ end
 -- Uses the `client_options` given at creation to connect to the configured
 -- Cassandra node.
 function _Host.connect(conf)
-  local obj = {
-    overload = conf.overload,
+  local obj = {   
     protocol_version = conf.protocol_version or cql.def_protocol_version,
     keyspace = conf.keyspace,
   }
@@ -223,6 +222,7 @@ function _Host.connect(conf)
     host = conf.host or "127.0.0.1",
     port = conf.port or 9042,
     nodelay = true,
+    overload = conf.overload,
   }
 
   setmetatable(obj, _Host)
