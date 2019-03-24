@@ -19,7 +19,8 @@ Notes:
   - v4: does not implement custom payloads for custom QueryHandler
 --]]
 
-local bit = require 'bit'
+
+local bit = require 'cassandra.compatible'.bit
 
 local setmetatable = setmetatable
 local tonumber = tonumber
@@ -28,7 +29,7 @@ local pairs = pairs
 local type = type
 local insert = table.insert
 local concat = table.concat
-local ldexp = math.ldexp
+local ldexp = require 'cassandra.compatible'.ldexp --math.ldexp
 local frexp = math.frexp
 local floor = math.floor
 local fmod = math.fmod
@@ -316,7 +317,7 @@ do
   end
 
   local function unmarsh_short_bytes(buffer)
-     return buffer:read(buffer:read_short())
+    return buffer:read(buffer:read_short())
   end
 
   local function marsh_uuid(val)
@@ -544,13 +545,13 @@ do
   local function marsh_bigint(val)
     local first_byte = val >= 0 and 0 or 0xFF
     return char(first_byte, -- only 53 bits from double
-               floor(val / 0x1000000000000) % 0x100,
-               floor(val / 0x10000000000) % 0x100,
-               floor(val / 0x100000000) % 0x100,
-               floor(val / 0x1000000) % 0x100,
-               floor(val / 0x10000) % 0x100,
-               floor(val / 0x100) % 0x100,
-               val % 0x100)
+              floor(val / 0x1000000000000) % 0x100,
+              floor(val / 0x10000000000) % 0x100,
+              floor(val / 0x100000000) % 0x100,
+              floor(val / 0x1000000) % 0x100,
+              floor(val / 0x10000) % 0x100,
+              floor(val / 0x100) % 0x100,
+              val % 0x100)
   end
 
   local function unmarsh_bigint(buffer)
@@ -597,12 +598,12 @@ do
     mantissa = (mantissa * 2.0 - 1.0) * ldexp(0.5, 53)
     return char(sign + floor(exponent / 0x10),
                (exponent % 0x10) * 0x10 + floor(mantissa / 0x1000000000000),
-               floor(mantissa / 0x10000000000) % 0x100,
-               floor(mantissa / 0x100000000) % 0x100,
-               floor(mantissa / 0x1000000) % 0x100,
-               floor(mantissa / 0x10000) % 0x100,
-               floor(mantissa / 0x100) % 0x100,
-               mantissa % 0x100)
+              floor(mantissa / 0x10000000000) % 0x100,
+              floor(mantissa / 0x100000000) % 0x100,
+              floor(mantissa / 0x1000000) % 0x100,
+              floor(mantissa / 0x10000) % 0x100,
+              floor(mantissa / 0x100) % 0x100,
+              mantissa % 0x100)
   end
 
   local function unmarsh_double(buffer)
@@ -663,8 +664,8 @@ do
     mantissa = floor(ldexp(mantissa, 23) + 0.5)
     return char(sign + floor(exponent / 2),
                (exponent % 2) * 0x80 + floor(mantissa / 0x10000),
-               floor(mantissa / 0x100) % 0x100,
-               mantissa % 0x100)
+              floor(mantissa / 0x100) % 0x100,
+              mantissa % 0x100)
   end
 
   local function unmarsh_float(buffer)

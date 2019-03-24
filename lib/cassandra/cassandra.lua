@@ -3,8 +3,15 @@
 -- @module cassandra
 -- @author thibaultcha
 -- @release 1.3.4
+--https://www.vultr.com/docs/how-to-install-apache-cassandra-3-11-x-on-centos-7
 
-local socket = require 'cassandra.socket'
+
+-- CREATE KEYSPACE cloudfreexiao WITH replication = {'class':'SimpleStrategy', 'replication_factor': 1};
+
+-- CREATE TABLE cloudfreexiao.users(id text PRIMARY KEY,name text, age int);
+
+
+local socketchannel =  require "skynet.socketchannel"
 local cql = require 'cassandra.cql'
 
 local setmetatable = setmetatable
@@ -72,12 +79,11 @@ local find = string.find
 -- @field plain_text The plain text auth provider.
 --     local auth = cassandra.auth_provider.plain_text("username", "password")
 -- @table cassandra.auth_providers
-
 local _Host = {
   _VERSION = '1.3.4',
   cql_errors = cql.errors,
   consistencies = cql.consistencies,
-  auth_providers = require 'cassandra.auth'
+  auth_providers = require 'cassandra.auth',
 }
 
 _Host.__index = _Host
@@ -111,67 +117,44 @@ _Host.__index = _Host
 --
 -- @usage
 -- local cassandra = require "cassandra"
--- local client = cassandra.new {
+-- local client = cassandra.connect {
 --   host = "10.0.0.1",
 --   port = 9042,
 --   keyspace = "my_keyspace"
 -- }
 --
--- @param[type=table] opts Options for the created client.
--- @treturn table `client`: A table able to connect to the given host and port.
-function _Host.new(opts)
-  opts = opts or {}
-  local sock, err = socket.tcp()
-  if err then return nil, err end
+local inspect_lib = require "inspect"
+local function __dispatch_resp(sock)
+  do
+      -- receive frame version byte
+      local v_byte, err = sock:read(1)
+      if not v_byte then
+        return false, err 
+      end
 
-  local host = {
-    sock = sock,
-    host = opts.host or '127.0.0.1',
-    port = opts.port or 9042,
-    keyspace = opts.keyspace,
-    protocol_version = opts.protocol_version or cql.def_protocol_version,
-    ssl = opts.ssl,
-    verify = opts.verify,
-    cert = opts.cert,
-    cafile = opts.cafile,
-    key = opts.key,
-    auth = opts.auth
-  }
+      -- -1 because of the v_byte we just read
+      local version, n_bytes = cql.frame_reader.version(v_byte)
+    -- receive frame header
+    local header_bytes, err = sock:read(n_bytes)
+    if not header_bytes then
+      return false, err 
+    end
 
-  return setmetatable(host, _Host)
-end
-
-function _Host:send(request)
-  if not self.sock then
-    return nil, 'no socket created'
+    local header = cql.frame_reader.read_header(version, header_bytes)
+    -- receive frame body
+    local body_bytes
+    if header.body_length > 0 then
+      body_bytes, err = sock:read(header.body_length)
+      if not body_bytes then
+        return false, err
+      end
+    end
+    local res, err, cql_err_code = cql.frame_reader.read_body(header, body_bytes)
+    if not res then
+      return false, err .. " errcode:" .. cql_err_code
+    end
+    return true, res
   end
-
-  local frame = request:build_frame(self.protocol_version)
-  local sent, err = self.sock:send(frame)
-  if not sent then return nil, err end
-
-  -- receive frame version byte
-  local v_byte, err = self.sock:receive(1)
-  if not v_byte then return nil, err end
-
-  -- -1 because of the v_byte we just read
-  local version, n_bytes = cql.frame_reader.version(v_byte)
-
-  -- receive frame header
-  local header_bytes, err = self.sock:receive(n_bytes)
-  if not header_bytes then return nil, err end
-
-  local header = cql.frame_reader.read_header(version, header_bytes)
-
-  -- receive frame body
-  local body_bytes
-  if header.body_length > 0 then
-    body_bytes, err = self.sock:receive(header.body_length)
-    if not body_bytes then return nil, err end
-  end
-
-  -- res, err, cql_err_code
-  return cql.frame_reader.read_body(header, body_bytes)
 end
 
 local function send_startup(self)
@@ -190,112 +173,61 @@ local function send_auth(self)
   end
 end
 
-local function ssl_handshake(self)
-  local params = {
-    key = self.key,
-    cafile = self.cafile,
-    cert = self.cert
-  }
 
-  return self.sock:sslhandshake(false, nil, self.verify, params)
+local function cassandra_login(self)
+  return function(sc)
+      -- startup request on first connection
+      local res, err, code = send_startup(self)
+      if not res then
+        if code == cql.errors.PROTOCOL then
+          error("Invalid or unsupported protocol version")
+        end
+
+        if res.must_authenticate then
+          if not self.auth then
+            error("authentication required")
+          end
+
+          local ok, err = send_auth(self)
+          if not ok then
+            error("auth error:", err)
+          end
+        end
+      end
+      
+      local keyspace_req = requests.keyspace.new(self.keyspace)
+      local res, err = self:send(keyspace_req)
+      if not res then
+        error("set keyspace error:", err)
+      end
+  end
+end
+
+function _Host:send(request)
+  local frame = request:build_frame(self.protocol_version)
+  return self.__sock:request(frame, __dispatch_resp)
 end
 
 --- Connect to the remote node.
 -- Uses the `client_options` given at creation to connect to the configured
 -- Cassandra node.
---
--- @usage
--- local cassandra = require "cassandra"
--- local client = cassandra.new()
--- assert(client:connect())
---
--- @treturn boolean `ok`: `true` if success, `nil` if failure.
--- @treturn string `err`: String describing the error if failure.
-function _Host:connect()
-  if not self.sock then
-    return nil, 'no socket created'
-  end
+function _Host.connect(conf)
+  local obj = {
+    overload = conf.overload,
+    protocol_version = conf.protocol_version or cql.def_protocol_version,
+    keyspace = conf.keyspace,
+  }
 
-  local ok, err = self.sock:connect(self.host, self.port, {
-    pool = fmt('%s:%d:%s', self.host, self.port, self.keyspace or '')
-  })
-  if not ok then return nil, err, true end
+  obj.__sock = socketchannel.channel {
+    auth = cassandra_login(obj),
+    host = conf.host or "127.0.0.1",
+    port = conf.port or 9042,
+    nodelay = true,
+  }
 
-  if self.ssl then
-    ok, err = ssl_handshake(self)
-    if not ok then return nil, 'SSL handshake: '..err end
-  end
-
-  local reused, err = self.sock:getreusedtimes()
-  if not reused then return nil, err end
-
-  if reused < 1 then
-    -- startup request on first connection
-    local res, err, code = send_startup(self)
-    if not res then
-      if code == cql.errors.PROTOCOL and
-        find(err, 'Invalid or unsupported protocol version', nil, true) then
-        -- too high protocol version
-        self.sock:close()
-        local sock, err = socket.tcp()
-        if err then return nil, err end
-        self.sock = sock
-        self.protocol_version = self.protocol_version - 1
-        if self.protocol_version < cql.min_protocol_version then
-          return nil, 'could not find a supported protocol version'
-        end
-        return self:connect()
-      end
-
-      -- real connection issue, host could be down?
-      return nil, err, true
-    elseif res.must_authenticate then
-      if not self.auth then
-        return nil, 'authentication required'
-      end
-
-      local ok, err = send_auth(self)
-      if not ok then return nil, err end
-    end
-
-    if self.keyspace then
-      local keyspace_req = requests.keyspace.new(self.keyspace)
-      local res, err = self:send(keyspace_req)
-      if not res then return nil, err end
-    end
-  end
-
-  return true
-end
-
---- Set the timeout value.
--- @see https://github.com/openresty/lua-nginx-module#tcpsocksettimeout
--- @param[type=number] timeout Value in milliseconds (for connect/read/write).
--- @treturn boolean `ok`: `true` if success, `nil` if failure.
--- @treturn string `err`: String describing the error if failure.
-function _Host:settimeout(...)
-  if not self.sock then
-    return nil, 'no socket created'
-  end
-  self.sock:settimeout(...)
-  return true
-end
-
---- Put the underlying socket into the cosocket connection pool.
--- Keeps the underlying socket alive until other clients use the `connect`
--- method on the same host/port combination.
--- @see https://github.com/openresty/lua-nginx-module#tcpsocksetkeepalive
--- @param[type=number] timeout (optional) Value in milliseconds specifying the
--- maximal idle timeout.
--- @param[type=number] size (optional) Maximal number of connections allowed in
--- the pool for the current server.
--- @treturn number `success`: `1` if success, `nil` if failure.
--- @treturn string `err`: String describing the error if failure.
-function _Host:setkeepalive(...)
-  if not self.sock then
-    return nil, 'no socket created'
-  end
-  return self.sock:setkeepalive(...)
+  setmetatable(obj, _Host)
+  obj.__sock:connect(true)
+  return obj
 end
 
 --- Close the connection.
@@ -303,31 +235,8 @@ end
 -- @treturn number `success`: `1` if success, `nil` if failure.
 -- @treturn string `err`: String describing the error if failure.
 function _Host:close(...)
-  if not self.sock then
-    return nil, 'no socket created'
-  end
-  return self.sock:close(...)
-end
-
---- Change the client's keyspace.
--- Closes the current connection and open a new one to the given
--- keyspace.
--- The connection is closed and reopen so that we use a different connection
--- pool for usage in ngx_lua.
--- @param[type=string] keyspace Name of the desired keyspace.
--- @treturn boolean `ok`: `true` if success, `nil` if failure.
--- @treturn string `err`: String describing the error if failure.
-function _Host:change_keyspace(keyspace)
-  local _, err = self:close()
-  if err then return nil, err end
-
-  local sock, err = socket.tcp()
-  if err then return nil, err end
-
-  self.sock = sock
-  self.keyspace = keyspace
-
-  return self:connect()
+  self.__sock:close()
+  setmetatable(self, nil)
 end
 
 --- Query options.
