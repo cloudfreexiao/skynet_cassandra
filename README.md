@@ -37,7 +37,7 @@ which adds support for multi-node Cassandra datacenters.
 
 ## Usage
 
-Single host module (Lua and OpenResty):
+Single host module (skynet):
 
 ```lua
 local cassandra = require "cassandra.cassandra"
